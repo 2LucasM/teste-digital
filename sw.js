@@ -1,7 +1,7 @@
 "use strict";
 
 // Guarda os arquivos da página para ela abrir sem internet.
-const VERSAO = "teste-digital-v1";
+const VERSAO = "teste-digital-v2";
 const ARQUIVOS = ["./", "index.html", "teste.js", "manifest.webmanifest", "icone.svg"];
 
 self.addEventListener("install", (evento) => {

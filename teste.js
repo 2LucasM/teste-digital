@@ -6,13 +6,50 @@
 const CHAVE_CRED = "td_cred";
 const CHAVE_SAL = "td_sal";
 const CHAVE_CIFRA = "td_cifra";
+// O relatório e as aberturas ficam guardados no aparelho, para provar o que
+// aconteceu depois de fechar o app de vez (e não só enquanto a página está aberta).
+const CHAVE_RELATORIO = "td_relatorio";
+const CHAVE_ABERTURAS = "td_aberturas";
+const CHAVE_TRANCADO_EM = "td_trancado_em";
+const LIMITE_LINHAS = 80;
 
 const registro = [];
 const $ = (id) => document.getElementById(id);
 
+function mostrarRelatorio() {
+  $("relatorio").textContent = registro.join("\n");
+}
+
 function anotar(linha) {
   registro.push(linha);
-  $("relatorio").textContent = registro.join("\n");
+  if (registro.length > LIMITE_LINHAS) registro.splice(0, registro.length - LIMITE_LINHAS);
+  gravar(CHAVE_RELATORIO, JSON.stringify(registro));
+  mostrarRelatorio();
+}
+
+function quando(ms) {
+  return new Date(ms).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+// Devolve true se é a primeira abertura com relatório guardado (aí vale anotar o que o aparelho suporta).
+function carregarRelatorio() {
+  let anterior = [];
+  try { anterior = JSON.parse(ler(CHAVE_RELATORIO) || "[]"); } catch { anterior = []; }
+  if (Array.isArray(anterior)) registro.push(...anterior.filter((l) => typeof l === "string"));
+  mostrarRelatorio();
+  return registro.length === 0;
+}
+
+function anotarAbertura() {
+  const n = (parseInt(ler(CHAVE_ABERTURAS) || "0", 10) || 0) + 1;
+  gravar(CHAVE_ABERTURAS, String(n));
+  const trancadoEm = parseInt(ler(CHAVE_TRANCADO_EM) || "", 10);
+  const guardado = ler(CHAVE_CIFRA)
+    ? "sim" + (trancadoEm ? " (trancado em " + quando(trancadoEm) + ")" : "")
+    : "não";
+  anotar("— Abertura " + n + ", " + quando(Date.now()) + ": " +
+    (navigator.onLine ? "com" : "sem") + " internet; " +
+    (modoInstalado() ? "app instalado" : "navegador") + "; texto trancado guardado: " + guardado);
 }
 
 function mostrar(id, texto, ok) {
@@ -65,7 +102,7 @@ function atualizarBotoes() {
   $("abrir").disabled = !(temCred && ler(CHAVE_CIFRA));
 }
 
-async function checar() {
+async function checar(anotarNoRelatorio) {
   const itens = [];
   const add = (rotulo, valor) => itens.push([rotulo, valor]);
 
@@ -101,7 +138,7 @@ async function checar() {
     const li = document.createElement("li");
     li.textContent = rotulo + ": " + valor;
     $("checagens").appendChild(li);
-    anotar(rotulo + ": " + valor);
+    if (anotarNoRelatorio) anotar(rotulo + ": " + valor);
   }
 }
 
@@ -133,7 +170,9 @@ async function criar() {
     const prf = cred.getClientExtensionResults().prf;
     gravar(CHAVE_CRED, paraB64(cred.rawId));
     gravar(CHAVE_SAL, paraB64(sal));
-    try { localStorage.removeItem(CHAVE_CIFRA); } catch { /* sem guarda local */ }
+    for (const chave of [CHAVE_CIFRA, CHAVE_TRANCADO_EM]) {
+      try { localStorage.removeItem(chave); } catch { /* sem guarda local */ }
+    }
     const habilitado = prf && prf.enabled === true;
     anotar("Criar chave: ok; PRF habilitado = " + (prf ? String(prf.enabled) : "sem resposta"));
     mostrar("estado-criar",
@@ -179,6 +218,7 @@ async function trancar() {
     const iv = aleatorio(12);
     const dados = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, chave, new TextEncoder().encode($("texto").value));
     gravar(CHAVE_CIFRA, JSON.stringify({ iv: paraB64(iv), dados: paraB64(dados) }));
+    gravar(CHAVE_TRANCADO_EM, String(Date.now()));
     $("texto").value = "";
     anotar("Trancar: ok; digital conferida = " + (conferido ? "sim" : "não") + "; " + (navigator.onLine ? "com" : "sem") + " internet");
     mostrar("estado-trancar", "Texto trancado e apagado da tela. Agora teste o passo 4.", true);
@@ -218,9 +258,11 @@ async function copiar() {
 }
 
 function limpar() {
-  for (const chave of [CHAVE_CRED, CHAVE_SAL, CHAVE_CIFRA]) {
+  for (const chave of [CHAVE_CRED, CHAVE_SAL, CHAVE_CIFRA, CHAVE_TRANCADO_EM, CHAVE_RELATORIO, CHAVE_ABERTURAS]) {
     try { localStorage.removeItem(chave); } catch { /* sem guarda local */ }
   }
+  registro.length = 0;
+  mostrarRelatorio();
   atualizarBotoes();
   mostrar("estado-copiar",
     "Apagado daqui. A chave \"Teste digital\" ainda fica nas senhas do aparelho; apague por lá se quiser.", true);
@@ -234,13 +276,15 @@ $("limpar").addEventListener("click", limpar);
 window.addEventListener("online", atualizarRede);
 window.addEventListener("offline", atualizarRede);
 
+const primeiraVez = carregarRelatorio();
+anotarAbertura();
 atualizarRede();
 atualizarBotoes();
-checar();
+checar(primeiraVez);
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js").then(
-    () => anotar("Funcionar sem internet: preparado"),
+    () => { if (primeiraVez) anotar("Funcionar sem internet: preparado"); },
     (e) => anotar("Funcionar sem internet: falhou; " + descreverErro(e)),
   );
 } else {
